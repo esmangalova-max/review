@@ -57,4 +57,47 @@ func HandleSz(arcname string, zf *dbase.ZFiles) error {
 	return nil
 }
 
+func MoveSZToArchWOTran() error {
+	sqlSelectRegId := fmt.Sprintf("select distinct registr_id from  %s.szl_curent order by  UUIDv7ToDateTime(registr_id) desc", cnfg.Cnfg.CDb)
+	chd := *cnfg.Cnfg.CH
+	var regId uuid.UUID
+	ctx := context.Background()
+	err := chd.QueryRow(ctx, sqlSelectRegId).Scan(&regId)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return errors.Errorf("QueryRow failed: %w", err)
+	}
 
+	sqlChkExists := fmt.Sprintf(`select exists(select toUInt8(1) from %s.szl_arch where registr_id = toUUID('%v')) ex`, cnfg.Cnfg.CDb, regId)
+	var regExistsInArch uint8
+	err = chd.QueryRow(ctx, sqlChkExists).Scan(&regExistsInArch)
+	if err != nil {
+		return errors.Errorf("QueryRow (check exists registr_id) failed: %w", err)
+	}
+	if regExistsInArch == 1 {
+		fmt.Println("Already moved to arch")
+		return nil
+	}
+
+	err = chd.Exec(ctx, fmt.Sprintf(sqlScripts.CopySZLToArch, cnfg.Cnfg.CDb, cnfg.Cnfg.CDb))
+
+	if err != nil {
+		return errors.Errorf("CopySZLToArch : %w", err)
+	}
+	err = chd.Exec(ctx, fmt.Sprintf(sqlScripts.CopySZPToArch, cnfg.Cnfg.CDb, cnfg.Cnfg.CDb))
+	if err != nil {
+		return errors.Errorf("CopySZPToArch : %w", err)
+	}
+	err = chd.Exec(ctx, fmt.Sprintf(sqlScripts.TruncateSZL, cnfg.Cnfg.CDb))
+	if err != nil {
+		return errors.Errorf("TruncateSZL : %w", err)
+	}
+	err = chd.Exec(ctx, fmt.Sprintf(sqlScripts.TruncateSZP, cnfg.Cnfg.CDb))
+	if err != nil {
+		return errors.Errorf("TruncateSZP : %w", err)
+	}
+
+	return nil
+}
