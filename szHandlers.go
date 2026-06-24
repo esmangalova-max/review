@@ -425,3 +425,101 @@ func SaveSzP(dbfdata *[]byte, zf *dbase.ZFiles) error {
 
 	return nil
 }
+
+
+
+
+
+func TmpToCurrent() error {
+	ch := *cnfg.Cnfg.CH
+	ctx := context.Background()
+	ctx, done := context.WithTimeout(ctx, time.Second*3600)
+	defer done()
+	err := ch.Exec(ctx, fmt.Sprintf(sqlScripts.TmpToCurrentSZL, cnfg.Cnfg.CDb))
+	if err != nil {
+		return errors.Errorf("TmpToCurrentSZL error: %s", err.Error())
+	}
+	err = ch.Exec(ctx, fmt.Sprintf(sqlScripts.TmpToCurrentSZP, cnfg.Cnfg.CDb))
+	if err != nil {
+		return errors.Errorf("TmpToCurrentSZP error: %s", err.Error())
+	}
+	return nil
+}
+
+func AddFilesRecord(zf *dbase.ZFiles, status int) error {
+	sqlInsert := fmt.Sprintf("insert into %s.files (id, filename, status) values (toUUID('%v'), '%s', %d)", cnfg.Cnfg.CDb, zf.RId, zf.FName, status)
+	ch := *cnfg.Cnfg.CH
+	err := ch.Exec(context.Background(), sqlInsert)
+	if err != nil {
+		return errors.Errorf("AddFilesRecord error: %s", err.Error())
+	}
+	return nil
+}
+
+func RefreshPersonList() error {
+	ch := *cnfg.Cnfg.CH
+	ctx := context.Background()
+	ctx, done := context.WithTimeout(ctx, time.Second*6000)
+	defer done()
+	sqlDropPChash := fmt.Sprintf("drop table if exists %s.p_chash;", cnfg.Cnfg.CDb)
+	sqlCreatePChash := fmt.Sprintf(`
+CREATE MATERIALIZED VIEW %s.p_chash
+            (
+             chash Nullable(UInt64),
+             ss String,
+             id_list UInt64
+                )
+            ENGINE = Memory populate
+AS
+SELECT chash,
+       ss,
+       id_list
+FROM (
+         SELECT DISTINCT cityHash64(replaceAll(
+                 concat(upperUTF8(fam), upperUTF8(im), upperUTF8(ot), substringUTF8(toString(dr), 1, 10)), 'Ё',
+                 'Е'))               AS chash,
+                         szp.ss      AS ss,
+                         szp.id_list AS id_list
+         FROM %s.szp_curent szp
+                  INNER JOIN %s.szl_curent szl ON (szp.registr_id = szl.registr_id) AND (szp.id_list = szl.id_list)
+                  INNER JOIN %s.c_kat AS ck ON ck.c_kat = szl.c_kat
+         UNION ALL
+         SELECT cityHash64(replaceAll(
+                 concat(upperUTF8(fam), upperUTF8(im), upperUTF8(ot), substringUTF8(toString(dr), 1, 10)), 'Ё',
+                 'Е'))      AS chash,
+                szp.ss      AS ss,
+                szp.id_list AS id_list
+         FROM %s.szp_curent szp
+                  INNER JOIN %s.szl_curent szl ON (szp.registr_id = szl.registr_id) AND (szp.id_list = szl.id_list)
+           where (szl.c_kat = '05')
+         )
+`, cnfg.Cnfg.CDb, cnfg.Cnfg.CDb, cnfg.Cnfg.CDb, cnfg.Cnfg.CDb, cnfg.Cnfg.CDb, cnfg.Cnfg.CDb)
+	sqlDropPChashArray := fmt.Sprintf("drop table if exists %s.p_chash_array;", cnfg.Cnfg.CDb)
+	sqlCreatePChashArray := fmt.Sprintf(`
+		CREATE MATERIALIZED VIEW %s.p_chash_array
+		(
+			chash_array Array(UInt64)
+		)
+		ENGINE = Memory populate
+		AS
+		SELECT groupArray(chash) AS chash_array
+		FROM %s.p_chash;
+`, cnfg.Cnfg.CDb, cnfg.Cnfg.CDb)
+	err := ch.Exec(ctx, sqlDropPChash)
+	if err != nil {
+		return errors.Errorf("DropPCHash error: %s", err.Error())
+	}
+	err = ch.Exec(ctx, sqlCreatePChash)
+	if err != nil {
+		return errors.Errorf("CreatePCHash error: %s", err.Error())
+	}
+	err = ch.Exec(ctx, sqlDropPChashArray)
+	if err != nil {
+		return errors.Errorf("DropPCHashArray error: %s", err.Error())
+	}
+	err = ch.Exec(ctx, sqlCreatePChashArray)
+	if err != nil {
+		return errors.Errorf("CreatePCHashArray error: %s", err.Error())
+	}
+	return nil
+}
