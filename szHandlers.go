@@ -202,3 +202,226 @@ func MoveSZToArch() error {
 
 	return nil
 }
+
+func SaveSzL(dbfdata *[]byte, zf *dbase.ZFiles) error {
+	chcon := *cnfg.Cnfg.CH
+	sqlDropTemp := fmt.Sprintf(`DROP TABLE IF EXISTS %s.szl`, "tmp_lzp")
+	sqlCrateTemp := fmt.Sprintf("%s %s", fmt.Sprintf(sqlScripts.NewSZL, "tmp_lzp"), "engine = Memory")
+	sqlInsert := fmt.Sprintf(sqlScripts.InserSZL, "tmp_lzp")
+	dbf, err := godbf.NewFromByteArray(*dbfdata, "cp866")
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	err = chcon.Exec(ctx, sqlDropTemp)
+	if err != nil {
+		return errors.Errorf("Error drop temp szl: %v", err)
+	}
+	err = chcon.Exec(ctx, sqlCrateTemp)
+	if err != nil {
+		return errors.Errorf("Error create temp szl: %v", err)
+	}
+
+	chBatch, err := chcon.PrepareBatch(ctx, sqlInsert)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// fmt.Println("dbf.NumberOfRecords():", dbf.NumberOfRecords())
+	// fmt.Println("SaveSzL:")
+	bar := progressbar.Default(int64(dbf.NumberOfRecords()), "SaveSzL:")
+	step := cnfg.Cnfg.SzBatchSize
+	for i := range dbf.NumberOfRecords() {
+
+		if i == 0 {
+
+			ctx1, done := context.WithTimeout(ctx, 10*time.Second)
+			defer done()
+			chBatch, err = chcon.PrepareBatch(ctx1, sqlInsert)
+			if err != nil {
+				done()
+			}
+
+		}
+
+		if i%step == 0 && i != 0 {
+			err = chBatch.Send()
+			if err != nil {
+				log.Fatal(err)
+			}
+			chBatch.Close()
+			ctx1, done := context.WithTimeout(ctx, 10*time.Second)
+			defer done()
+			chBatch, err = chcon.PrepareBatch(ctx1, sqlInsert)
+		}
+		if i%step == 0 && i != 0 {
+			// fmt.Println(i, "SZL batch send")
+			bar.Add(step)
+		}
+		var row dbase.SzL
+		row.Id, _ = uuid.NewV7()
+		row.RId = zf.RId
+		IdlistStr, _ := dbf.FieldValueByName(i, "ID_LIST")
+		row.Idlist, _ = strconv.ParseUint(IdlistStr, 10, 64)
+		row.Ss, _ = dbf.FieldValueByName(i, "SS")
+		row.CKat, _ = dbf.FieldValueByName(i, "C_KAT")
+		row.KatF, _ = dbf.FieldValueByName(i, "KAT_F")
+		row.NameDL, _ = dbf.FieldValueByName(i, "NAME_DL")
+		row.SnDl, _ = dbf.FieldValueByName(i, "SN_DL")
+		dbl, _ := dbf.FieldValueByName(i, "DATE_BL")
+		if dbl == "" {
+			row.DateBl = nil
+		} else {
+			tmp, _ := time.Parse("20060102", dbl)
+			row.DateBl = &tmp
+		}
+		ddel, _ := dbf.FieldValueByName(i, "DATE_EL")
+		if ddel == "" {
+			row.DateEl = nil
+		} else {
+			tmp, _ := time.Parse("20060102", ddel)
+			row.DateEl = &tmp
+		}
+		row.Comment, _ = dbf.FieldValueByName(i, "COMENT")
+		uslp, _ := dbf.FieldValueByName(i, "USLP")
+		if uslp == "" || uslp == " " {
+			uslp = "0"
+		}
+		row.Uslp, err = strconv.ParseUint(uslp, 10, 64)
+		if err != nil {
+			// fmt.Println("===>", uslp, "<===>", err)
+			row.Uslp = uint64(0)
+		}
+
+		err = chBatch.AppendStruct(&row)
+		if err != nil {
+			return fmt.Errorf("Append to batch: %w", err)
+		}
+
+	}
+	bar.Finish()
+	err = chBatch.Send()
+	if err != nil {
+		return fmt.Errorf("Send batch: %w", err)
+	}
+	chBatch.Close()
+
+	return nil
+}
+func SaveSzP(dbfdata *[]byte, zf *dbase.ZFiles) error {
+	chcon := *cnfg.Cnfg.CH
+	sqlDropTemp := fmt.Sprintf(`DROP TABLE IF EXISTS %s.szp`, "tmp_lzp")
+	sqlCrateTemp := fmt.Sprintf("%s %s", fmt.Sprintf(sqlScripts.NewSZP, "tmp_lzp"), "engine = Memory")
+	sqlInsert := fmt.Sprintf(sqlScripts.InsertSZP, "tmp_lzp")
+	ctx := context.Background()
+	err := chcon.Exec(ctx, sqlDropTemp)
+	if err != nil {
+		return errors.Errorf("Error drop temp szp: %v", err)
+	}
+	err = chcon.Exec(ctx, sqlCrateTemp)
+	if err != nil {
+		return errors.Errorf("Error create temp szp: %v", err)
+	}
+	chBatch, err := chcon.PrepareBatch(ctx, sqlInsert)
+	if err != nil {
+		log.Fatal(err)
+	}
+	dbfTable, err := godbf.NewFromByteArray(*dbfdata, "CP866")
+	bar := progressbar.Default(int64(dbfTable.NumberOfRecords()), "SaveSzP:")
+	step := cnfg.Cnfg.SzBatchSize
+	for i := 0; i < dbfTable.NumberOfRecords(); i++ {
+		// if i > 10 {
+		//	break
+		// }
+
+		if i%step == 0 && i != 0 {
+
+			// defer cancel()
+
+			err = chBatch.Send()
+			if err != nil {
+				log.Fatal(err)
+			}
+			// fmt.Println(i, "batch send ")
+			chBatch.Close()
+			ctx, _ := context.WithTimeout(ctx, 20*time.Second)
+			chBatch, err = chcon.PrepareBatch(ctx, sqlInsert)
+		}
+		if i%step == 0 && i != 0 {
+			bar.Add(step)
+		}
+		var row dbase.SzP
+		row.Id, _ = uuid.NewV7()
+		row.RId = zf.RId
+		idListStr, _ := dbfTable.FieldValueByName(i, "ID_LIST")
+		row.Idlist, _ = strconv.ParseUint(idListStr, 10, 64)
+		row.Ss, _ = dbfTable.FieldValueByName(i, "SS")
+		row.SPol, _ = dbfTable.FieldValueByName(i, "S_POL")
+		row.NPol, _ = dbfTable.FieldValueByName(i, "N_POL")
+		row.Fam, _ = dbfTable.FieldValueByName(i, "FAM")
+		row.Im, _ = dbfTable.FieldValueByName(i, "IM")
+		row.Ot, _ = dbfTable.FieldValueByName(i, "OT")
+		row.Gender, _ = dbfTable.FieldValueByName(i, "W")
+		dr, _ := dbfTable.FieldValueByName(i, "DR")
+		if dr == "" {
+			dr = "18990101"
+		}
+		row.Dr, _ = time.Parse("20060102", dr)
+
+		// row.Dr = fmt.Sprintf("%s-%s-%s 00:00:00", dr[:4], dr[4:6], dr[6:8])
+		// fmt.Println(dr, row.Dr)
+		row.SDoc, _ = dbfTable.FieldValueByName(i, "S_DOC")
+		row.NDoc, _ = dbfTable.FieldValueByName(i, "N_DOC")
+		cDoc, _ := dbfTable.FieldValueByName(i, "C_DOC")
+		row.CDoc, _ = strconv.ParseUint(cDoc, 10, 64)
+		row.PCity, _ = dbfTable.FieldValueByName(i, "P_CITY")
+		row.Ul, _ = dbfTable.FieldValueByName(i, "UL")
+		row.Dom = uint64(0)
+		row.Bdom = ""
+		row.Kor = uint64(0)
+		row.Kv = uint64(0)
+		row.Bkv = ""
+		drb, _ := dbfTable.FieldValueByName(i, "DATE_RB")
+		dre, _ := dbfTable.FieldValueByName(i, "DATE_RE")
+		if drb == "" {
+			row.DateRb = nil
+		} else {
+			drbp, _ := time.Parse("20060102", drb)
+			row.DateRb = &drbp
+		}
+		if dre == "" {
+			row.DateRe = nil
+		} else {
+
+			drep, _ := time.Parse("20060102", dre)
+			row.DateRe = &drep
+		}
+		okato, _ := dbfTable.FieldValueByName(i, "OKATO_OMS")
+		row.OkatoOms, _ = strconv.ParseUint(okato, 10, 64)
+		row.QmOgrn, _ = dbfTable.FieldValueByName(i, "QM_OGRN")
+		utyp, _ := dbfTable.FieldValueByName(i, "UT_TYPE")
+		row.UType, _ = strconv.ParseUint(utyp, 10, 64)
+		row.DType, _ = dbfTable.FieldValueByName(i, "D_TYPE")
+		row.Comment, _ = dbfTable.FieldValueByName(i, "COMENT")
+		row.SsF, _ = dbfTable.FieldValueByName(i, "SS_F")
+		dd, _ := dbfTable.FieldValueByName(i, "DATEDEATH")
+		if dd == "" {
+			row.Datedeath = nil
+		} else {
+
+			ddp, _ := time.Parse("20060102", dd)
+			row.Datedeath = &ddp
+		}
+		err = chBatch.AppendStruct(&row)
+		if err != nil {
+			return err
+		}
+	}
+	bar.Finish()
+	err = chBatch.Send()
+	if err != nil {
+		return err
+	}
+	chBatch.Close()
+
+	return nil
+}
